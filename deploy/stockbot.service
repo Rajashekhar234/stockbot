@@ -1,0 +1,21 @@
+[Unit]
+Description=Intraday Stock Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/stockbot
+EnvironmentFile=/home/ubuntu/stockbot/.env
+ExecStart=/home/ubuntu/stockbot/.venv/bin/python main.py --schedule
+Restart=always
+RestartSec=15
+StandardOutput=append:/home/ubuntu/stockbot/logs/systemd.log
+StandardError=append:/home/ubuntu/stockbot/logs/systemd.log
+
+# Run with IST timezone so all market-time math is correct
+Environment=TZ=Asia/Kolkata
+
+[Install]
+WantedBy=multi-user.target
