@@ -119,11 +119,23 @@ class TradeEngine:
             if not pos:
                 return
 
-            # Trailing SL once price is +1.5%
+            profit_pct = (ltp - pos.entry_price) / pos.entry_price * 100
+            from datetime import time as _t
+            now_t = now_ist().time()
+            afternoon = now_t >= _t(11, 30)
+
+            # Trailing SL once price is +trail_after_pct
             if ltp >= pos.entry_price * (1 + settings.trail_after_pct):
                 if ltp > pos.high_watermark:
                     pos.high_watermark = ltp
-                trail_sl = round(pos.high_watermark * (1 - settings.stop_loss_pct), 2)
+                # Tighten trail in afternoon if we're sitting on a big gain
+                # — protects against the classic post-11:30 gap-fill reversal.
+                trail_pct = settings.stop_loss_pct
+                if afternoon and profit_pct >= 4.0:
+                    trail_pct = 0.003   # 0.3 %
+                elif afternoon and profit_pct >= 3.0:
+                    trail_pct = 0.005   # 0.5 %
+                trail_sl = round(pos.high_watermark * (1 - trail_pct), 2)
                 if trail_sl > pos.sl_price:
                     pos.sl_price = trail_sl
 

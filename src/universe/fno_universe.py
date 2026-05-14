@@ -14,8 +14,6 @@ Both are cached daily under data/cache/.
 """
 from __future__ import annotations
 
-import csv
-import io
 import json
 from dataclasses import dataclass
 from datetime import date
@@ -24,6 +22,7 @@ from pathlib import Path
 import requests
 
 from config import CACHE_DIR, settings
+from src.universe.nse_client import NSEClient
 from src.utils.logger import get_logger
 
 log = get_logger("universe")
@@ -31,15 +30,6 @@ log = get_logger("universe")
 ANGEL_SCRIP_MASTER = (
     "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 )
-NSE_FNO_LOTS = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
-
-_NSE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    ),
-    "Accept": "*/*",
-}
 
 
 @dataclass
@@ -69,25 +59,14 @@ def _download(url: str, cache_name: str, headers: dict | None = None) -> bytes:
 def load_fno_symbols() -> set[str]:
     """Returns the set of NSE underlying symbols that have F&O contracts."""
     try:
-        raw = _download(NSE_FNO_LOTS, "fno_lots.csv", _NSE_HEADERS).decode("utf-8", "ignore")
+        nse = NSEClient()
+        symbols = set(nse.fno_securities())
+        if symbols:
+            return symbols
+        raise RuntimeError("NSE returned empty list")
     except Exception as e:
-        log.warning("NSE fetch failed (%s) — falling back to bundled list", e)
+        log.warning("NSE F&O list fetch failed (%s) — falling back to bundled list", e)
         return _bundled_fno_fallback()
-
-    symbols: set[str] = set()
-    reader = csv.reader(io.StringIO(raw))
-    for row in reader:
-        if not row or len(row) < 2:
-            continue
-        sym = row[1].strip().upper()
-        # Skip header rows / index rows / blanks
-        if not sym or sym in {"SYMBOL", "UNDERLYING"} or " " in sym:
-            continue
-        if sym in {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}:
-            continue
-        symbols.add(sym)
-    log.info("Loaded %d F&O underlyings from NSE", len(symbols))
-    return symbols
 
 
 def _bundled_fno_fallback() -> set[str]:

@@ -22,7 +22,7 @@ log = get_logger("main")
 def _scheduled():
     log.info("Scheduler tick — kicking off daily run")
     try:
-        run_day()
+        run_day(skip_wait=False)
     except Exception as e:
         log.exception("Daily run crashed: %s", e)
 
@@ -45,7 +45,7 @@ def main():
             time.sleep(30)
 
     log.info("Starting one-shot run (now=%s)", args.now)
-    run_day()
+    run_day(skip_wait=args.now)
 
 
 if __name__ == "__main__":

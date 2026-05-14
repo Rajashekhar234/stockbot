@@ -21,14 +21,17 @@ from src.alerts.notifier import Notifier
 from src.broker.angel_client import AngelClient
 from src.control import state
 from src.control.telegram_bot import TelegramController
-from src.premarket.gap_scanner import fetch_prev_close, scan_gaps
+from src.premarket.gap_scanner import fetch_pre_open_rows, fetch_prev_close_from_nse, scan_gaps
 from src.premarket.gift_nifty import fetch_gift_nifty
+from src.safety import print_startup_banner, write_monthly_summary
+from src.scanner.bull_trap import BullTrapDetector
 from src.scanner.orb import compute_opening_range, is_breakout
 from src.scanner.scorer import ScoreInputs, score
 from src.scanner.volume import avg_daily_volume, volume_multiplier
 from src.stream.websocket_feed import TickStream
 from src.trade.engine import TradeEngine
 from src.universe.fno_universe import build_universe, filter_by_price
+from src.universe.nse_client import NSEClient
 from src.utils.logger import get_logger
 from src.utils.market_time import is_weekday, now_ist, today_at
 
@@ -41,10 +44,20 @@ def _wait_until(t: time) -> None:
         pytime.sleep(5)
 
 
-def run_day() -> None:
+def run_day(skip_wait: bool = False) -> None:
+    print_startup_banner()
     if not is_weekday():
         log.info("Weekend — bot idle.")
         return
+
+    # NSE holiday gate
+    try:
+        is_hol, desc = NSEClient().is_today_holiday()
+        if is_hol:
+            log.info("\U0001F389 NSE holiday today (%s) — bot idle.", desc)
+            return
+    except Exception as e:
+        log.warning("Holiday check failed (%s) — continuing", e)
 
     notifier = Notifier()
     broker_ok = bool(settings.angel_api_key and settings.angel_client_code)
@@ -62,12 +75,23 @@ def run_day() -> None:
 
     # 1. Universe ----------------------------------------------------------
     instruments = build_universe()
-    if broker:
-        prev_close = fetch_prev_close(broker, instruments)
+
+    # F&O ban list — never trade these today
+    try:
+        ban = NSEClient().fo_ban_list()
+        if ban:
+            instruments = [i for i in instruments if i.symbol not in ban]
+            log.info("After F&O ban filter: %d instruments", len(instruments))
+    except Exception as e:
+        log.debug("ban-list fetch failed: %s", e)
+
+    # Single NSE pre-open fetch — gives prev close, open, gap % for everyone
+    pre_open_rows = fetch_pre_open_rows()
+    prev_close = fetch_prev_close_from_nse(pre_open_rows)
+    if prev_close:
         instruments = filter_by_price(instruments, prev_close)
     else:
-        prev_close = {}
-        log.warning("Broker disabled — running with universe but no live data")
+        log.warning("Pre-open data empty — skipping price-band filter")
 
     # 2. GIFT Nifty bias ---------------------------------------------------
     gift = fetch_gift_nifty()
@@ -77,15 +101,19 @@ def run_day() -> None:
         return
 
     # 3. Wait for opening range to complete -------------------------------
-    log.info("Waiting until 09:30 IST for ORB completion …")
-    _wait_until(ORB_END)
+    if not skip_wait:
+        log.info("Waiting until 09:30 IST for ORB completion …")
+        _wait_until(ORB_END)
 
     if not broker:
         log.error("Cannot continue without broker (no live ORB / ticks). Exiting.")
         return
 
-    # 4. Gap scan & top candidates ----------------------------------------
-    gappers = scan_gaps(broker, instruments, prev_close, top_n=25)
+    # 4. Gap scan & top candidates (gap-UP first — long-only bot) ---------
+    gappers = scan_gaps(instruments, pre_open_rows, top_n=25)
+    # Prefer positive gaps for entry; keep neg gaps only as filler
+    gappers.sort(key=lambda r: (r.gap_pct < 0, -r.gap_pct))
+    bull_trap = BullTrapDetector()
 
     # 5. Score each candidate ---------------------------------------------
     candidates = []
@@ -94,6 +122,10 @@ def run_day() -> None:
         if not opening:
             continue
         ltp = broker.ltp("NSE", g.trading_symbol, g.token)
+        bull_trap.update(g.symbol, ltp)
+        if bull_trap.is_rejected(g.symbol):
+            log.info("Skip %s — bull trap detected", g.symbol)
+            continue
         if not is_breakout(ltp, opening, "UP"):
             continue
         avg_vol = avg_daily_volume(broker, g.token)
@@ -154,6 +186,10 @@ def run_day() -> None:
     finally:
         stream.stop()
         tg.stop()
+        try:
+            write_monthly_summary()
+        except Exception as e:
+            log.debug("monthly summary failed: %s", e)
         notifier.alert("Market closed — bot shutting down. Review logs/trades_*.csv")
 
 
