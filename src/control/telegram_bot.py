@@ -18,6 +18,7 @@ import requests
 
 from config import settings
 from src.control import state
+from src.control.tg_config import SAFE_KEYS, list_keys, set_value, show_config
 from src.utils.logger import get_logger
 
 log = get_logger("tg-cmd")
@@ -91,8 +92,26 @@ class TelegramController:
             return
 
         cmd = text.split()[0].lower().split("@")[0]
+        args = text.split()[1:]
+
+        # /set<key> <value>  (e.g. /setamount 25000)
+        if cmd.startswith("/set") and cmd != "/setup":
+            key = cmd[4:]
+            if not args:
+                self._send(f"Usage: {cmd} <value>")
+                return
+            self._send(set_value(key, args[0]))
+            return
+
         if cmd == "/help":
-            self._send("Commands:\n/status /pause /resume /stop /positions")
+            self._send(
+                "Control:\n"
+                "  /status /pause /resume /stop /positions\n"
+                "Config:\n"
+                "  /config       — show current values\n"
+                "  /settings     — list editable keys\n"
+                "  /set<key> <v> — e.g. /setamount 25000, /setmode PAPER"
+            )
         elif cmd == "/status":
             s = state.snapshot()
             self._send(
@@ -119,5 +138,9 @@ class TelegramController:
                     for p in self.engine.positions.values()
                 ]
                 self._send("\n".join(lines))
+        elif cmd == "/config":
+            self._send(show_config())
+        elif cmd == "/settings":
+            self._send(list_keys())
         else:
             self._send(f"Unknown command: {cmd}")
