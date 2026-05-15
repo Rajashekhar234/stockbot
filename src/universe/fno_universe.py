@@ -84,8 +84,14 @@ def _bundled_fno_fallback() -> set[str]:
 
 
 def build_universe(angel_client=None) -> list[Instrument]:
-    """Returns Instruments to monitor today."""
-    fno = load_fno_symbols()
+    """Returns Instruments to monitor today.
+
+    Two modes (set UNIVERSE_MODE in .env):
+      * BROAD  — every NSE EQ scrip (price/liquidity filters happen later)
+      * FNO    — only NSE F&O underlyings (~209)
+    """
+    mode = settings.universe_mode
+    fno = load_fno_symbols() if mode == "FNO" else set()
 
     raw = _download(ANGEL_SCRIP_MASTER, "angel_scrip.json").decode("utf-8", "ignore")
     scrips = json.loads(raw)
@@ -96,10 +102,12 @@ def build_universe(angel_client=None) -> list[Instrument]:
         if s.get("exch_seg") != "NSE":
             continue
         ts = (s.get("symbol") or "").upper()        # e.g. RELIANCE-EQ
-        if not ts.endswith("-EQ"):                  # series must be EQ
+        if not ts.endswith("-EQ"):                  # series must be EQ (no BE / T2T / SM)
             continue
         base = ts[:-3]
-        if base in seen or base not in fno:
+        if base in seen:
+            continue
+        if mode == "FNO" and base not in fno:
             continue
         seen.add(base)
         instruments.append(
@@ -112,7 +120,7 @@ def build_universe(angel_client=None) -> list[Instrument]:
             )
         )
 
-    log.info("Universe built: %d EQ instruments mapped to F&O underlyings", len(instruments))
+    log.info("Universe built (%s): %d EQ instruments", mode, len(instruments))
     return instruments
 
 

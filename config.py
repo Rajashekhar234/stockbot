@@ -75,8 +75,11 @@ class Settings:
     force_exit_time: time = _get_time("FORCE_EXIT_TIME", "15:00")
 
     # Universe
+    universe_mode: str = _get("UNIVERSE_MODE", "BROAD").upper()  # BROAD | FNO
     min_price: float = _get_float("MIN_PRICE", 100)
-    max_price: float = _get_float("MAX_PRICE", 3000)
+    max_price: float = _get_float("MAX_PRICE", 5000)
+    min_preopen_value: float = _get_float("MIN_PREOPEN_VALUE", 10_00_000)  # 10 lakh
+    max_candidates: int = _get_int("MAX_CANDIDATES", 25)
 
     # Score
     min_score: int = _get_int("MIN_SCORE", 80)
@@ -92,6 +95,7 @@ settings = Settings()
 
 # Market session constants (IST)
 MARKET_OPEN = time(9, 15)
+PRE_OPEN_FETCH = time(9, 8)   # NSE pre-open is final at 09:08 IST
 ORB_END = time(9, 30)
 NO_NEW_TRADE_AFTER = time(14, 30)
 MARKET_CLOSE = time(15, 30)

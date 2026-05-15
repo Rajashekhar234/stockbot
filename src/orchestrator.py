@@ -15,7 +15,7 @@ from __future__ import annotations
 import time as pytime
 from datetime import time
 
-from config import MARKET_CLOSE, NO_NEW_TRADE_AFTER, ORB_END, settings
+from config import MARKET_CLOSE, NO_NEW_TRADE_AFTER, ORB_END, PRE_OPEN_FETCH, settings
 from src.ai.gemini_news import analyze as analyze_news
 from src.alerts.notifier import Notifier
 from src.broker.angel_client import AngelClient
@@ -85,6 +85,11 @@ def run_day(skip_wait: bool = False) -> None:
     except Exception as e:
         log.debug("ban-list fetch failed: %s", e)
 
+    # Wait until 09:08 IST so the NSE pre-open prices are FINAL
+    if not skip_wait:
+        log.info("Waiting until 09:08 IST for final pre-open prices …")
+        _wait_until(PRE_OPEN_FETCH)
+
     # Single NSE pre-open fetch — gives prev close, open, gap % for everyone
     pre_open_rows = fetch_pre_open_rows()
     prev_close = fetch_prev_close_from_nse(pre_open_rows)
@@ -110,9 +115,7 @@ def run_day(skip_wait: bool = False) -> None:
         return
 
     # 4. Gap scan & top candidates (gap-UP first — long-only bot) ---------
-    gappers = scan_gaps(instruments, pre_open_rows, top_n=25)
-    # Prefer positive gaps for entry; keep neg gaps only as filler
-    gappers.sort(key=lambda r: (r.gap_pct < 0, -r.gap_pct))
+    gappers = scan_gaps(instruments, pre_open_rows, top_n=settings.max_candidates)
     bull_trap = BullTrapDetector()
 
     # 5. Score each candidate ---------------------------------------------
@@ -144,20 +147,21 @@ def run_day(skip_wait: bool = False) -> None:
                  g.symbol, s, g.gap_pct, vx, verdict.summary)
 
     candidates.sort(key=lambda x: x[0], reverse=True)
-    top10 = candidates[:10]
-    if not top10:
+    top_n = settings.max_candidates
+    top_picks = candidates[:top_n]
+    if not top_picks:
         notifier.alert("No qualifying candidates after ORB — sitting out today.")
         return
 
     notifier.alert(
-        "Top 10 candidates:\n" + "\n".join(
+        f"Top {len(top_picks)} candidates:\n" + "\n".join(
             f"  {i+1}. {g.symbol}  score={s}  ltp={ltp:.2f}  ({v.summary})"
-            for i, (s, g, ltp, v) in enumerate(top10)
+            for i, (s, g, ltp, v) in enumerate(top_picks)
         )
     )
 
     # 6. Pick the winner --------------------------------------------------
-    best = top10[0]
+    best = top_picks[0]
     if best[0] < settings.min_score:
         notifier.alert(f"Best score {best[0]} < threshold {settings.min_score} — no trade.")
         return
@@ -167,7 +171,7 @@ def run_day(skip_wait: bool = False) -> None:
                      ltp=ltp, score=s, note=verdict.summary)
 
     # 7. Live monitoring --------------------------------------------------
-    token_to_symbol = {g.token: g.symbol for _, g, _, _ in top10}
+    token_to_symbol = {g.token: g.symbol for _, g, _, _ in top_picks}
     stream = TickStream(broker, token_to_symbol)
     stream.start(on_tick=engine.on_tick)
 
